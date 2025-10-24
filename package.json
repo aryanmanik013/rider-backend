@@ -2,10 +2,10 @@
   "name": "rider-backend",
   "version": "1.0.0",
   "description": "",
-  "main": "server.js",
+  "main": "index.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "nodemon server.js",
+    "start": "node index.js",
+    "dev": "nodemon index.js",
     "seed:achievements": "node scripts/seedAchievements.js",
     "test": "jest",
     "test:watch": "jest --watch",
