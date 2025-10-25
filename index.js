@@ -30,6 +30,7 @@ import serviceRoutes from "./routes/serviceRoutes.js";
 import paymentRoutes from "./routes/paymentRoutes.js";
 import subscriptionRoutes from "./routes/subscriptionRoutes.js";
 import analyticsRoutes from "./routes/analyticsRoutes.js";
+import reelsRoutes from "./routes/reelsRoutes.js";
 console.log("Environment loaded:", process.env.MONGO_URI ? "✅ OK" : "❌ Missing");
 console.log("JWT Secret loaded:", process.env.JWT_SECRET ? "✅ OK" : "❌ Missing");
 
@@ -80,6 +81,7 @@ app.use("/api/v1/service", serviceRoutes);
 app.use("/api/v1/payments", paymentRoutes);
 app.use("/api/v1/subscription", subscriptionRoutes);
 app.use("/api/v1/analytics", analyticsRoutes);
+app.use("/api/v1/reels", reelsRoutes);
 
 // example protected route
 import { protect } from "./middleware/authMiddleware.js";
