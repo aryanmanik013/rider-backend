@@ -11,7 +11,12 @@ import {
   deleteMessage,
   markConversationRead,
   addParticipant,
-  removeParticipant
+  removeParticipant,
+  getConversationById,
+  muteConversation,
+  archiveConversation,
+  updateConversation,
+  leaveConversation
 } from "../controllers/chatController.js";
 
 const router = express.Router();
@@ -42,9 +47,14 @@ router.put("/messages/:messageId/edit", protect, editMessage);
 router.delete("/messages/:messageId/delete", protect, deleteMessage);
 
 // Dynamic routes (must come after specific routes)
+router.get("/:conversationId", protect, getConversationById);
 router.get("/:conversationId/messages", protect, getConversationMessages);
 router.put("/:conversationId/read", protect, markConversationRead);
+router.put("/:conversationId/mute", protect, muteConversation);
+router.put("/:conversationId/archive", protect, archiveConversation);
+router.put("/:conversationId", protect, updateConversation);
 router.post("/:conversationId/participants", protect, addParticipant);
 router.delete("/:conversationId/participants", protect, removeParticipant);
+router.delete("/:conversationId/leave", protect, leaveConversation);
 
 export default router;
