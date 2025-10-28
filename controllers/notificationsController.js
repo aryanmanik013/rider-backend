@@ -1,6 +1,7 @@
 // controllers/notificationsController.js
 import Notification from "../models/Notification.js";
 import User from "../models/User.js";
+import { getSocketInstance } from "../utils/socket.js";
 
 // Get user notifications with pagination
 export const getNotifications = async (req, res) => {
@@ -291,6 +292,23 @@ export const sendPushNotification = async (req, res) => {
       }
     });
 
+    // Emit real-time notification via Socket.io
+    const io = getSocketInstance();
+    if (io) {
+      io.to(`user_${userId}`).emit('notification', {
+        _id: notification._id,
+        title: notification.title,
+        message: notification.message,
+        type: notification.type,
+        priority: notification.priority,
+        relatedEntity: notification.relatedEntity,
+        actionData: notification.actionData,
+        metadata: notification.metadata,
+        createdAt: notification.createdAt,
+        timestamp: new Date()
+      });
+    }
+
     // Send push notification to all active device tokens
     const activeTokens = user.notificationSettings.deviceTokens.filter(
       token => token.isActive
@@ -426,6 +444,36 @@ export const deleteNotification = async (req, res) => {
 
   } catch (error) {
     res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
+
+// Helper function to send notification with real-time Socket.io event
+export const sendReactiveNotification = async (notificationData) => {
+  try {
+    // Create notification in database
+    const notification = await Notification.createNotification(notificationData);
+    
+    // Emit real-time notification via Socket.io
+    const io = getSocketInstance();
+    if (io) {
+      io.to(`user_${notificationData.recipient}`).emit('notification', {
+        _id: notification._id,
+        title: notification.title,
+        message: notification.message,
+        type: notification.type,
+        priority: notification.priority,
+        relatedEntity: notification.relatedEntity,
+        actionData: notification.actionData,
+        metadata: notification.metadata,
+        createdAt: notification.createdAt,
+        timestamp: new Date()
+      });
+    }
+    
+    return notification;
+  } catch (error) {
+    console.error('Error sending reactive notification:', error);
+    throw error;
   }
 };
 
