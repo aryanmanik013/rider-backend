@@ -38,6 +38,20 @@ export const getConversations = async (req, res) => {
         };
       }
       
+      // For direct conversations, identify the other participant
+      let otherParticipant = null;
+      if (conv.type === 'direct' && conv.participants.length === 2) {
+        const otherUser = conv.participants.find(p => p._id.toString() !== userId);
+        if (otherUser) {
+          otherParticipant = {
+            _id: otherUser._id.toString(),
+            name: otherUser.name,
+            avatar: otherUser.avatar,
+            email: otherUser.email
+          };
+        }
+      }
+      
       return {
         _id: conv._id.toString(),
         type: conv.type,
@@ -47,6 +61,7 @@ export const getConversations = async (req, res) => {
           avatar: p.avatar,
           email: p.email
         })),
+        otherParticipant, // Helper field for direct conversations
         name: conv.name,
         description: conv.description,
         avatar: conv.avatar,
@@ -166,6 +181,11 @@ export const sendMessage = async (req, res) => {
     
     const message = await Message.create(messageData);
     await message.populate('sender', 'name avatar email');
+    await message.populate('recipient', 'name avatar email');
+    
+    // Add isMine field for easy identification
+    const messageObj = message.toObject();
+    messageObj.isMine = true;
     
     // Update conversation's last message
     conversation.lastMessage = {
@@ -193,6 +213,7 @@ export const sendMessage = async (req, res) => {
     const io = getSocketInstance();
     if (io) {
       conversation.participants.forEach(p => {
+        const isMineForUser = p.toString() === userId;
         io.to(`user_${p.toString()}`).emit('new_message', {
           _id: message._id,
           conversation: conversation._id,
@@ -202,16 +223,23 @@ export const sendMessage = async (req, res) => {
             avatar: message.sender.avatar,
             email: message.sender.email
           },
+          recipient: message.recipient ? {
+            _id: message.recipient._id,
+            name: message.recipient.name,
+            avatar: message.recipient.avatar,
+            email: message.recipient.email
+          } : null,
           content: message.content,
           type: message.type,
           metadata: message.metadata,
           createdAt: message.createdAt,
-          isEdited: message.isEdited
+          isEdited: message.isEdited,
+          isMine: isMineForUser
         });
       });
     }
     
-    res.status(201).json(message);
+    res.status(201).json(messageObj);
   } catch (error) {
     res.status(500).json({ message: "Server error", error: error.message });
   }
@@ -250,6 +278,7 @@ export const getConversationMessages = async (req, res) => {
       isDeleted: false
     })
     .populate('sender', 'name avatar email')
+    .populate('recipient', 'name avatar email')
     .sort({ createdAt: -1 }) // Most recent first
     .limit(limit)
     .skip(skip);
@@ -264,8 +293,15 @@ export const getConversationMessages = async (req, res) => {
     // Populate conversation participants
     await conversation.populate('participants', 'name avatar email');
     
+    // Add isMine field to each message for easy identification
+    const messagesWithIsMine = messages.map(msg => {
+      const msgObj = msg.toObject();
+      msgObj.isMine = msg.sender._id.toString() === userId;
+      return msgObj;
+    });
+    
     res.json({ 
-      messages: messages.reverse(), // Reverse to show oldest first
+      messages: messagesWithIsMine.reverse(), // Reverse to show oldest first
       conversation,
       pagination: {
         page,
@@ -304,8 +340,13 @@ export const editMessage = async (req, res) => {
     message.editedAt = new Date();
     await message.save();
     await message.populate('sender', 'name avatar email');
+    await message.populate('recipient', 'name avatar email');
     
-    res.json(message);
+    // Add isMine field for easy identification
+    const messageObj = message.toObject();
+    messageObj.isMine = message.sender._id.toString() === userId;
+    
+    res.json(messageObj);
   } catch (error) {
     res.status(500).json({ message: "Server error", error: error.message });
   }
@@ -463,11 +504,26 @@ export const getConversationById = async (req, res) => {
     const userUnread = conversation.unreadCounts.find(u => u.user.toString() === userId);
     const unreadCount = userUnread ? userUnread.count : 0;
     
+    // For direct conversations, identify the other participant
+    let otherParticipant = null;
+    if (conversation.type === 'direct' && conversation.participants.length === 2) {
+      const otherUser = conversation.participants.find(p => p._id.toString() !== userId);
+      if (otherUser) {
+        otherParticipant = {
+          _id: otherUser._id.toString(),
+          name: otherUser.name,
+          avatar: otherUser.avatar,
+          email: otherUser.email
+        };
+      }
+    }
+    
     res.json({
       conversation: {
         _id: conversation._id,
         type: conversation.type,
         participants: conversation.participants,
+        otherParticipant, // Helper field for direct conversations
         name: conversation.name,
         description: conversation.description,
         avatar: conversation.avatar,
