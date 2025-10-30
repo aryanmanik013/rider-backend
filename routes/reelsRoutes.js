@@ -3,7 +3,6 @@ import express from "express";
 import multer from "multer";
 import { 
   createReel,
-  createReelWithLink,
   getReelFeed,
   getTrendingReels,
   getReelDetails,
@@ -23,7 +22,7 @@ const router = express.Router();
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 100 * 1024 * 1024, // 100MB limit for videos
+    fileSize: 10 * 1024 * 1024, // 10MB limit for videos
   },
   fileFilter: (req, file, cb) => {
     // Accept video files
@@ -45,7 +44,7 @@ router.get("/:id", protect, getReelDetails);
 
 // Protected routes (authentication required)
 router.post("/", protect, upload.single('video'), createReel);
-router.post("/with-link", protect, createReelWithLink);
+// with-link endpoint removed (upload-only policy)
 router.post("/:id/like", protect, toggleLike);
 router.post("/:id/save", protect, toggleSave);
 router.post("/:id/comment", protect, addComment);

@@ -1,7 +1,7 @@
 // controllers/reelsController.js
 import Reel from "../models/Reel.js";
 import User from "../models/User.js";
-import { uploadToCloudinary } from "../utils/cloudinary.js";
+import { uploadReelVideo, uploadReelThumbnail, getPublicUrl, deleteFromR2 } from "../utils/r2.js";
 
 // Create a new reel
 export const createReel = async (req, res) => {
@@ -22,26 +22,21 @@ export const createReel = async (req, res) => {
       return res.status(400).json({ message: "Video file is required" });
     }
 
-    // Upload video to Cloudinary
-    const videoResult = await uploadToCloudinary(req.file, {
-      resource_type: "video",
-      folder: "reels/videos",
-      transformation: [
-        { width: 720, height: 1280, crop: "fill", gravity: "center" }, // 9:16 aspect ratio
-        { quality: "auto" }
-      ]
-    });
+    // Upload video to R2
+    const videoResult = await uploadReelVideo(
+      req.file.buffer,
+      userId.toString(),
+      req.file.originalname
+    );
 
-    // Generate thumbnail
-    const thumbnailResult = await uploadToCloudinary(req.file, {
-      resource_type: "video",
-      folder: "reels/thumbnails",
-      transformation: [
-        { width: 720, height: 1280, crop: "fill", gravity: "center" },
-        { start_offset: "1", duration: "1" }, // Get frame at 1 second
-        { format: "jpg", quality: "auto" }
-      ]
-    });
+    // Generate thumbnail (placeholder - enhance with ffmpeg later if needed)
+    // For now, create a thumbnail path (you can extract actual thumbnail using ffmpeg)
+    const thumbnailPath = videoResult.key.replace('/videos/', '/thumbnails/').replace(/\.[^.]+$/, '.jpg');
+    const thumbnailUrl = getPublicUrl(thumbnailPath);
+    
+    // TODO: Extract actual thumbnail frame from video using ffmpeg
+    // Example: Use fluent-ffmpeg or @ffmpeg-installer/ffmpeg to extract frame at 1 second
+    // For now, using placeholder URL structure
 
     // Process hashtags
     const processedHashtags = hashtags
@@ -61,10 +56,10 @@ export const createReel = async (req, res) => {
     const reel = await Reel.create({
       creator: userId,
       video: {
-        url: videoResult.secure_url,
-        cloudinaryId: videoResult.public_id,
-        duration: videoResult.duration || 30, // Default duration if not detected
-        thumbnail: thumbnailResult.secure_url,
+        url: videoResult.url, // Fast R2 public URL
+        cloudinaryId: videoResult.key, // Store R2 key instead of cloudinary ID
+        duration: 30, // TODO: Extract actual duration from video metadata
+        thumbnail: thumbnailUrl,
         aspectRatio: "9:16"
       },
       audio: {
@@ -492,6 +487,19 @@ export const deleteReel = async (req, res) => {
       return res.status(403).json({ message: "Not authorized to delete this reel" });
     }
 
+    // Delete video and thumbnail from R2
+    try {
+      if (reel.video.cloudinaryId) {
+        await deleteFromR2(reel.video.cloudinaryId);
+        // Delete thumbnail (replace videos path with thumbnails)
+        const thumbnailKey = reel.video.cloudinaryId.replace('/videos/', '/thumbnails/').replace(/\.[^.]+$/, '.jpg');
+        await deleteFromR2(thumbnailKey);
+      }
+    } catch (r2Error) {
+      console.error("R2 deletion error:", r2Error);
+      // Continue with database deletion even if R2 deletion fails
+    }
+
     reel.status = 'deleted';
     await reel.save();
 
@@ -502,113 +510,7 @@ export const deleteReel = async (req, res) => {
   }
 };
 
-// Create reel with temporary video link (for testing/development)
-export const createReelWithLink = async (req, res) => {
-  try {
-    const userId = req.user._id;
-    const {
-      videoUrl,
-      caption = "",
-      hashtags = [],
-      mentions = [],
-      location,
-      audio = {},
-      rideContext = {},
-      visibility = "public"
-    } = req.body;
-
-    // Validate video URL
-    if (!videoUrl || typeof videoUrl !== 'string') {
-      return res.status(400).json({ message: "Valid video URL is required" });
-    }
-
-    // Check if it's a Pexels URL (for now we'll accept any URL, but you can add more validation)
-    const isValidUrl = (url) => {
-      try {
-        new URL(url);
-        return true;
-      } catch {
-        return false;
-      }
-    };
-
-    if (!isValidUrl(videoUrl)) {
-      return res.status(400).json({ message: "Invalid URL format" });
-    }
-
-    // Process hashtags
-    const processedHashtags = hashtags
-      .map(tag => tag.replace(/^#/, '').toLowerCase().trim())
-      .filter(tag => tag.length > 0);
-
-    // Validate mentions
-    const validMentions = [];
-    for (const mentionId of mentions) {
-      const user = await User.findById(mentionId);
-      if (user) {
-        validMentions.push(mentionId);
-      }
-    }
-
-    // Generate a simple thumbnail URL (you can enhance this later)
-    const thumbnailUrl = videoUrl.replace(/\.(mp4|mov|avi|webm)$/i, '_thumbnail.jpg');
-
-    // Create reel with temporary link
-    const reel = await Reel.create({
-      creator: userId,
-      video: {
-        url: videoUrl,
-        cloudinaryId: `temp_${Date.now()}`, // Temporary ID for non-cloudinary videos
-        duration: 30, // Default duration - you can extract this from video metadata later
-        thumbnail: thumbnailUrl,
-        aspectRatio: "9:16"
-      },
-      audio: {
-        hasAudio: audio.hasAudio !== false,
-        originalAudio: audio.originalAudio !== false,
-        musicTrack: audio.musicTrack || null
-      },
-      caption: caption.trim(),
-      hashtags: processedHashtags,
-      mentions: validMentions,
-      location,
-      rideContext,
-      visibility
-    });
-
-    // Populate creator details
-    await reel.populate('creator', 'name avatar username');
-
-    res.status(201).json({
-      message: "Reel created successfully with temporary video link",
-      reel: {
-        _id: reel._id,
-        creator: {
-          _id: reel.creator._id,
-          name: reel.creator.name,
-          username: reel.creator.username,
-          avatar: reel.creator.avatar
-        },
-        video: reel.video,
-        audio: reel.audio,
-        caption: reel.caption,
-        hashtags: reel.hashtags,
-        mentions: reel.mentions,
-        location: reel.location,
-        rideContext: reel.rideContext,
-        visibility: reel.visibility,
-        likesCount: reel.likesCount,
-        commentsCount: reel.commentsCount,
-        views: reel.views,
-        createdAt: reel.createdAt
-      }
-    });
-
-  } catch (error) {
-    console.error("Create reel with link error:", error);
-    res.status(500).json({ message: "Server error", error: error.message });
-  }
-};
+// Removed: with-link endpoint (uploads only)
 
 // Search reels
 export const searchReels = async (req, res) => {

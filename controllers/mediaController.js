@@ -1,27 +1,20 @@
 // controllers/mediaController.js
 import Media from "../models/Media.js";
 import User from "../models/User.js";
-import { v2 as cloudinary } from "cloudinary";
+import { uploadToR2, deleteFromR2, getPublicUrl } from "../utils/r2.js";
 import multer from "multer";
 import path from "path";
-
-// Configure Cloudinary
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
-});
 
 // Configure multer for memory storage
 const storage = multer.memoryStorage();
 const upload = multer({
   storage: storage,
   limits: {
-    fileSize: 50 * 1024 * 1024, // 50MB limit
+    fileSize: 10 * 1024 * 1024, // 10MB hard cap; additional per-type checks below
   },
   fileFilter: (req, file, cb) => {
-    // Check file type
-    const allowedTypes = /jpeg|jpg|png|gif|mp4|mov|avi|pdf|doc|docx/;
+    // Check file type (images and documents only — videos go via reels API)
+    const allowedTypes = /jpeg|jpg|png|gif|pdf|doc|docx/;
     const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
     const mimetype = allowedTypes.test(file.mimetype);
 
@@ -51,42 +44,40 @@ export const uploadMedia = async (req, res) => {
     if (req.file.mimetype.startsWith('image/')) {
       fileType = 'image';
     } else if (req.file.mimetype.startsWith('video/')) {
-      fileType = 'video';
+      // Prevent duplicate video upload paths; direct users to reels endpoint
+      return res.status(400).json({ message: "Use /api/v1/reels for video uploads (max 10MB)" });
     }
 
-    // Upload to Cloudinary
-    const result = await new Promise((resolve, reject) => {
-      const uploadStream = cloudinary.uploader.upload_stream(
-        {
-          resource_type: fileType === 'video' ? 'video' : 'image',
-          folder: `rider-app/${category}`,
-          public_id: `${userId}_${Date.now()}`,
-          transformation: fileType === 'image' ? [
-            { width: 1920, height: 1080, crop: 'limit', quality: 'auto' }
-          ] : undefined
-        },
-        (error, result) => {
-          if (error) reject(error);
-          else resolve(result);
-        }
-      );
+    // Enforce per-type size limits: images ≤ 5MB, videos ≤ 10MB
+    const maxImageBytes = 5 * 1024 * 1024;
+    const maxVideoBytes = 10 * 1024 * 1024; // kept for guard if a video slips through
+    if (fileType === 'image' && req.file.size > maxImageBytes) {
+      return res.status(413).json({ message: "Image too large (max 5MB)" });
+    }
+    if (fileType === 'video' && req.file.size > maxVideoBytes) {
+      return res.status(413).json({ message: "Video too large (max 10MB)" });
+    }
 
-      uploadStream.end(req.file.buffer);
-    });
+    // Build R2 object key
+    const timestamp = Date.now();
+    const fileExt = path.extname(req.file.originalname).toLowerCase().replace('.', '') || 'jpg';
+    const key = `media/${fileType}s/${userId}/${timestamp}.${fileExt}`;
+
+    // Upload to Cloudflare R2
+    await uploadToR2(req.file.buffer, key, req.file.mimetype);
+    const publicUrl = getPublicUrl(key);
 
     // Create media record
     const media = new Media({
-      filename: result.public_id,
+      filename: key,
       originalName: req.file.originalname,
-      cloudinaryId: result.public_id,
-      url: result.url,
-      secureUrl: result.secure_url,
+      cloudinaryId: key, // repurpose field to store R2 object key
+      url: publicUrl,
+      secureUrl: publicUrl,
       fileType: fileType,
       mimeType: req.file.mimetype,
       size: req.file.size,
-      width: result.width,
-      height: result.height,
-      duration: result.duration,
+      // width/height/duration are unknown without extra processing; omit
       category: category,
       uploadedBy: userId,
       description: description,
@@ -143,14 +134,12 @@ export const deleteMedia = async (req, res) => {
       return res.status(404).json({ message: "Media not found or access denied" });
     }
 
-    // Delete from Cloudinary
+    // Delete from R2
     try {
-      await cloudinary.uploader.destroy(media.cloudinaryId, {
-        resource_type: media.fileType === 'video' ? 'video' : 'image'
-      });
-    } catch (cloudinaryError) {
-      console.error("Cloudinary deletion error:", cloudinaryError);
-      // Continue with database deletion even if Cloudinary fails
+      await deleteFromR2(media.cloudinaryId);
+    } catch (r2Error) {
+      console.error("R2 deletion error:", r2Error);
+      // Continue with database deletion even if R2 fails
     }
 
     // Soft delete from database
